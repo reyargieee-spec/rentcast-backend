@@ -165,20 +165,12 @@ app.get("/api/nearby-rentals", async (req, res) => {
   try {
     const r = await axios.get("https://api.rentcast.io/v1/avm/rent/long-term", {
       headers: { "X-Api-Key": process.env.RENTCAST_API_KEY },
-      params: {
-        address,
-        maxRadius: radius,
-        compCount: limit
-      },
+      params: { address, maxRadius: radius, compCount: limit },
       timeout: 20000
     });
 
     const rawComps = r.data?.comparables || r.data?.comps || [];
     const comps = rawComps.map(normalizeComp);
-
-    // Helpful debug (remove later): see if rent/sqft are coming through
-    // console.log("Sample raw comp keys:", Object.keys(rawComps[0] || {}));
-    // console.log("Normalized sample:", comps[0]);
 
     return res.json({
       ok: true,
@@ -192,6 +184,24 @@ app.get("/api/nearby-rentals", async (req, res) => {
     const status = error.response?.status || 500;
     const details = error.response?.data || { message: error.message };
 
+    // ✅ If RentCast can't find the address / no comps available,
+    // return a "valid empty" response so frontend still shows the table.
+    const treatAsEmpty = [400, 404, 422].includes(status);
+
+    if (treatAsEmpty) {
+      return res.json({
+        ok: true,
+        address,
+        radius,
+        limit,
+        count: 0,
+        comps: [],
+        note: "No comps found for this address (treated as empty).",
+        rentcastStatus: status
+      });
+    }
+
+    // Otherwise: real server/API error
     return res.status(status).json({
       ok: false,
       error: "Failed to fetch nearby rentals",
