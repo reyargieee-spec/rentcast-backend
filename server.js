@@ -413,7 +413,16 @@ app.get("/api/nearby-rentals", async (req, res) => {
 
     const treatAsEmpty = [400, 404, 422].includes(status);
     if (treatAsEmpty) {
-      return res.json({ ok: true, address, radius, limit, count: 0, comps: [], note: "No comps found", rentcastStatus: status });
+      return res.json({
+        ok: true,
+        address,
+        radius,
+        limit,
+        count: 0,
+        comps: [],
+        note: "No comps found",
+        rentcastStatus: status,
+      });
     }
 
     res.status(status).json({ ok: false, error: "Failed to fetch nearby rentals", details });
@@ -513,7 +522,7 @@ app.get("/api/realie/comparables", async (req, res) => {
     const details = error.response?.data || { message: error.message };
     res.status(status).json({ ok: false, error: "Realie comparables failed", details });
   }
-};
+}); // ✅ FIXED: was `};`
 
 // ==============================
 // Realie Sale Comps Helper
@@ -562,8 +571,9 @@ async function fetchRealieSaleComps({ state, county, subjectSqft, limit = 10 }) 
     });
 
     const rows = r.data?.comparables || r.data?.data || r.data || [];
-    const comps = (Array.isArray(rows) ? rows : []).map(normalizeSaleComp)
-      .filter(c => c.price && c.sqft);
+    const comps = (Array.isArray(rows) ? rows : [])
+      .map(normalizeSaleComp)
+      .filter((c) => c.price && c.sqft);
 
     if (comps.length) return { ok: true, comps, source: "realie_premium_comparables" };
   } catch (e) {
@@ -574,8 +584,6 @@ async function fetchRealieSaleComps({ state, county, subjectSqft, limit = 10 }) 
   try {
     const url = `${REALIE_BASE_URL}/public/property/search/`;
 
-    // NOTE: This fallback is “best effort” without guaranteeing Realie search filters.
-    // We’ll pull recent-ish county results, then filter those with salePrice/transferPrice.
     const params = {
       state,
       county,
@@ -592,14 +600,13 @@ async function fetchRealieSaleComps({ state, county, subjectSqft, limit = 10 }) 
     const rows = r.data?.results || r.data?.data || r.data?.properties || r.data || [];
     const arr = Array.isArray(rows) ? rows : [];
 
-    let comps = arr.map(normalizeSaleComp)
-      .filter(c => c.price && c.sqft);
+    let comps = arr.map(normalizeSaleComp).filter((c) => c.price && c.sqft);
 
     // keep closest sqft range if we have subject sqft
     const s = Number(subjectSqft);
     if (Number.isFinite(s) && s > 0) {
       comps = comps
-        .map(c => ({ ...c, sqftDiff: Math.abs(c.sqft - s) }))
+        .map((c) => ({ ...c, sqftDiff: Math.abs(c.sqft - s) }))
         .sort((a, b) => (a.sqftDiff ?? 9e9) - (b.sqftDiff ?? 9e9))
         .slice(0, limit)
         .map(({ sqftDiff, ...rest }) => rest);
@@ -619,12 +626,20 @@ function computeARVFromComps({ subjectSqft, saleComps }) {
     return { ok: false, arv: null, avgPpsf: null, compsUsed: 0, reason: "subjectSqft missing" };
   }
 
-  const valid = (saleComps || []).filter(c => c.price && c.sqft && Number.isFinite(c.price) && Number.isFinite(c.sqft) && c.price > 0 && c.sqft > 0);
+  const valid = (saleComps || []).filter(
+    (c) =>
+      c.price &&
+      c.sqft &&
+      Number.isFinite(c.price) &&
+      Number.isFinite(c.sqft) &&
+      c.price > 0 &&
+      c.sqft > 0
+  );
   if (!valid.length) {
     return { ok: false, arv: null, avgPpsf: null, compsUsed: 0, reason: "no valid sale comps" };
   }
 
-  const avgPpsf = valid.reduce((sum, c) => sum + (c.price / c.sqft), 0) / valid.length;
+  const avgPpsf = valid.reduce((sum, c) => sum + c.price / c.sqft, 0) / valid.length;
   const arv = Math.round(avgPpsf * sqft);
 
   return {
@@ -639,7 +654,6 @@ function computeARVFromComps({ subjectSqft, saleComps }) {
 // ==============================
 // Property Panel (RentCast + Realie + Geo + Census + Comps + ARV + Investment)
 // ==============================
-// GET /api/property-panel?fullAddress=...&cap=8&state=OH&addressLine1=...&city=CLEVELAND&county=CUYAHOGA
 app.get("/api/property-panel", async (req, res) => {
   const fullAddress = (req.query.fullAddress || req.query.address || "").trim();
   const capRatePercent = Number(req.query.cap || 8);
@@ -742,7 +756,7 @@ app.get("/api/property-panel", async (req, res) => {
       subjectSqft,
       rentEstimateMonthly,
       capRatePercent,
-      saleComps: saleComps.map(c => ({ price: c.price, sqft: c.sqft })),
+      saleComps: saleComps.map((c) => ({ price: c.price, sqft: c.sqft })),
     });
 
     // 8) Purchase price default (if user didn’t pass it)
@@ -766,12 +780,12 @@ app.get("/api/property-panel", async (req, res) => {
           })
         : {
             ok: false,
-            reason: "Need purchase price + monthly rent estimate. Pass purchasePrice=... or enable RentCast rentEstimate.",
+            reason:
+              "Need purchase price + monthly rent estimate. Pass purchasePrice=... or enable RentCast rentEstimate.",
             purchasePrice: fallbackPrice ?? null,
             monthlyRent: rentEstimateMonthly ?? null,
           };
 
-    // Make response cache-friendly for clients/CDN (optional)
     res.setHeader("Cache-Control", "public, max-age=60");
 
     res.json({
@@ -785,7 +799,7 @@ app.get("/api/property-panel", async (req, res) => {
         ok: saleCompsResp.ok,
         source: saleCompsResp.source,
         count: saleComps.length,
-        comps: saleComps.map(c => ({
+        comps: saleComps.map((c) => ({
           address: c.address,
           price: c.price,
           sqft: c.sqft,
