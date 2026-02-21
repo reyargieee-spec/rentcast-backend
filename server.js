@@ -122,22 +122,41 @@ function normalizeComp(c) {
 // ==============================
 const NOMINATIM_BASE = "https://nominatim.openstreetmap.org";
 
+const NOMINATIM_UA =
+  process.env.NOMINATIM_USER_AGENT ||
+  "RentCastPanel/1.0 (contact: your-real-email@domain.com)";
+
 async function geocodeToZip(address) {
-  const url = `${NOMINATIM_BASE}/search`;
-  const r = await axios.get(url, {
-    params: { q: address, format: "json", addressdetails: 1, limit: 1 },
-    headers: { "User-Agent": "DealAnalyzerDemo/1.0 (contact: your-email@example.com)" },
-    timeout: 20000,
-  });
+  try {
+    const url = `${NOMINATIM_BASE}/search`;
 
-  const hit = r.data?.[0];
-  if (!hit) return null;
+    const r = await axios.get(url, {
+      params: {
+        q: address,
+        format: "json",
+        addressdetails: 1,
+        limit: 1,
+      },
+      headers: {
+        "User-Agent": NOMINATIM_UA,
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+      timeout: 20000,
+    });
 
-  const zip = hit.address?.postcode || null;
-  const lat = hit.lat ? Number(hit.lat) : null;
-  const lon = hit.lon ? Number(hit.lon) : null;
+    const hit = r.data?.[0];
+    if (!hit) return null;
 
-  return { zip, lat, lon, raw: hit.address };
+    return {
+      zip: hit.address?.postcode || null,
+      lat: hit.lat ? Number(hit.lat) : null,
+      lon: hit.lon ? Number(hit.lon) : null,
+      raw: hit.address,
+    };
+  } catch (err) {
+    console.warn("Geocode failed:", err.response?.status || err.message);
+    return null; // IMPORTANT: do not crash the whole panel
+  }
 }
 
 async function fetchCensusByZip(zip) {
@@ -313,7 +332,7 @@ app.get("/api/realie/ping", (req, res) => {
   });
 });
 
-// GET /api/realie/address-lookup?state=OH&addressLine1=3894%20E%20144TH%20ST&city=CLEVELAND
+// GET /api/realie/address-lookup?state=OH&addressLine1=3894%20E%20144TH%20ST&city=CLEVELAND&county=CUYAHOGA
 app.get("/api/realie/address-lookup", async (req, res) => {
   try {
     if (!REALIE_API_KEY) return res.status(500).json({ ok: false, error: "REALIE_API_KEY is not set." });
@@ -337,7 +356,7 @@ app.get("/api/realie/address-lookup", async (req, res) => {
 
     const r = await axios.get(url, {
       headers: {
-        Authorization: REALIE_API_KEY, // Realie expects API key directly in Authorization header
+        Authorization: REALIE_API_KEY,
         Accept: "application/json",
       },
       params,
@@ -458,7 +477,7 @@ app.post("/api/avm", (req, res) => {
 // ==============================
 // Property Panel (RentCast + Realie + Geo + Census + AVM)
 // ==============================
-// GET /api/property-panel?fullAddress=...&cap=8&state=OH&addressLine1=...&city=CLEVELAND
+// GET /api/property-panel?fullAddress=...&cap=8&state=OH&addressLine1=...&city=CLEVELAND&county=CUYAHOGA
 app.get("/api/property-panel", async (req, res) => {
   const fullAddress = (req.query.fullAddress || req.query.address || "").trim();
   const capRatePercent = Number(req.query.cap || 8);
@@ -497,7 +516,6 @@ app.get("/api/property-panel", async (req, res) => {
         rentcastData = rentcastResp.data;
         rentcastProp = Array.isArray(rentcastData) ? rentcastData[0] : rentcastData;
       } catch (e) {
-        // swallow rentcast error; still return Realie + map + census
         rentcastData = null;
         rentcastProp = null;
       }
@@ -525,7 +543,7 @@ app.get("/api/property-panel", async (req, res) => {
       }
     }
 
-    // 3) Subject sqft + rent (try RentCast first, else Realie fields if you want)
+    // 3) Subject sqft + rent (try RentCast first, else Realie)
     const subjectSqft =
       toNumberLoose(pickFirst(rentcastProp, ["squareFeet", "sqft", "livingArea", "area", "sizeSqft"])) ??
       toNumberLoose(pickFirst(realie, ["buildingArea", "livingArea", "squareFeet", "sqft"])) ??
@@ -535,7 +553,7 @@ app.get("/api/property-panel", async (req, res) => {
       toNumberLoose(pickFirst(rentcastProp, ["rentEstimate", "rent", "estimatedRent", "rentEstimateMonthly"])) ??
       null;
 
-    // 4) AVM (your free computed fallback)
+    // 4) AVM (free computed fallback)
     const avm = computeSimpleAVM({
       subjectSqft,
       rentEstimateMonthly,
