@@ -15,10 +15,8 @@ const PORT = process.env.PORT || 3000;
 // ==============================
 const RENTCAST_API_KEY = process.env.RENTCAST_API_KEY;
 const REALIE_API_KEY = process.env.REALIE_API_KEY;
-
 const REALIE_BASE_URL = process.env.REALIE_BASE_URL || "https://app.realie.ai/api";
 
-// Nominatim User-Agent (REQUIRED by OSM policy; use a real email)
 const NOMINATIM_BASE = "https://nominatim.openstreetmap.org";
 const NOMINATIM_UA =
   process.env.NOMINATIM_USER_AGENT ||
@@ -31,6 +29,19 @@ const CENSUS_API_KEY = process.env.CENSUS_API_KEY;
 // ==============================
 app.get("/", (req, res) => res.send("Backend is running"));
 app.get("/ping", (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+
+// ✅ Debug: verify env is loaded on Render
+app.get("/api/debug/env", (req, res) => {
+  res.json({
+    ok: true,
+    hasRentcastKey: Boolean(RENTCAST_API_KEY),
+    hasRealieKey: Boolean(REALIE_API_KEY),
+    hasCensusKey: Boolean(CENSUS_API_KEY),
+    hasNominatimUA: Boolean(process.env.NOMINATIM_USER_AGENT),
+    realieBaseUrl: REALIE_BASE_URL,
+    time: new Date().toISOString(),
+  });
+});
 
 // ==============================
 // Helpers
@@ -168,14 +179,14 @@ async function fetchCensusByZip(zip) {
 
   const base = "https://api.census.gov/data/2022/acs/acs5";
   const fields = [
-    "B01003_001E", // population
-    "B19013_001E", // median household income
-    "B25064_001E", // median gross rent
-    "B25077_001E", // median home value
-    "B25003_002E", // owner occupied
-    "B25003_003E", // renter occupied
-    "B25004_001E", // vacant units
-    "B25002_001E", // total units
+    "B01003_001E",
+    "B19013_001E",
+    "B25064_001E",
+    "B25077_001E",
+    "B25003_002E",
+    "B25003_003E",
+    "B25004_001E",
+    "B25002_001E",
   ].join(",");
 
   const params = { get: fields, for: `zip code tabulation area:${zip5}` };
@@ -231,7 +242,6 @@ async function fetchCensusByZip(zip) {
   }
 }
 
-// Debug census quickly
 app.get("/api/census/ping", async (req, res) => {
   const zip = (req.query.zip || "").trim();
   if (!zip) return res.status(400).json({ ok: false, error: "zip is required (e.g., 44128)" });
@@ -254,7 +264,6 @@ function computeSimpleAVM({ subjectSqft, saleComps = [], rentEstimateMonthly, ca
     .map((c) => ({ price: Number(c.price), sqft: Number(c.sqft) }))
     .filter((c) => Number.isFinite(c.price) && c.price > 0 && Number.isFinite(c.sqft) && c.sqft > 0);
 
-  // A) comps-based AVM
   if (Number.isFinite(sqft) && sqft > 0 && validComps.length) {
     const avgPpsf = validComps.reduce((sum, c) => sum + c.price / c.sqft, 0) / validComps.length;
     const avm = Math.round(avgPpsf * sqft);
@@ -267,7 +276,6 @@ function computeSimpleAVM({ subjectSqft, saleComps = [], rentEstimateMonthly, ca
     };
   }
 
-  // B) rent-cap fallback
   const rent = Number(rentEstimateMonthly);
   const cap = Number(capRatePercent);
   if (Number.isFinite(rent) && rent > 0 && Number.isFinite(cap) && cap > 0) {
@@ -309,10 +317,9 @@ function computeInvestmentSummary({
   const operatingExpenses = effectiveGross * expense;
   const noi = effectiveGross - operatingExpenses;
 
-  const grm = P / grossAnnual; // Gross Rent Multiplier
+  const grm = P / grossAnnual;
   const capRate = (noi / P) * 100;
 
-  // Loan calc
   const loanAmount = P * (1 - dp);
   const monthlyRate = (Number(interestRatePercent) / 100) / 12;
   const n = Number(loanYears) * 12;
@@ -328,7 +335,7 @@ function computeInvestmentSummary({
   const cashFlowAnnual = noi - annualDebt;
   const cashFlowMonthly = cashFlowAnnual / 12;
 
-  const cashInvested = P * dp; // simplified: just down payment
+  const cashInvested = P * dp;
   const coc = cashInvested > 0 ? (cashFlowAnnual / cashInvested) * 100 : null;
 
   return {
@@ -368,15 +375,17 @@ function computeInvestmentSummary({
 }
 
 // ==============================
-// RentCast Endpoints
+// RentCast endpoints
 // ==============================
 app.get("/api/property", async (req, res) => {
   try {
     const address = (req.query.address || "").trim();
     if (!address) return res.status(400).json({ error: "Address is required" });
 
+    if (!RENTCAST_API_KEY) return res.status(500).json({ error: "RENTCAST_API_KEY not set" });
+
     const response = await axios.get("https://api.rentcast.io/v1/properties", {
-      headers: { "X-Api-Key": RENTCAST_API_KEY },
+      headers: { "X-Api-Key": RENTCAST_API_KEY, Accept: "application/json" },
       params: { address },
       timeout: 20000,
     });
@@ -396,9 +405,11 @@ app.get("/api/nearby-rentals", async (req, res) => {
   const radius = Number(req.query.radius ?? 0.5);
   const limit = Math.min(Number(req.query.limit ?? 10), 25);
 
+  if (!RENTCAST_API_KEY) return res.status(500).json({ ok: false, error: "RENTCAST_API_KEY not set" });
+
   try {
     const r = await axios.get("https://api.rentcast.io/v1/avm/rent/long-term", {
-      headers: { "X-Api-Key": RENTCAST_API_KEY },
+      headers: { "X-Api-Key": RENTCAST_API_KEY, Accept: "application/json" },
       params: { address, maxRadius: radius, compCount: limit },
       timeout: 20000,
     });
@@ -430,7 +441,7 @@ app.get("/api/nearby-rentals", async (req, res) => {
 });
 
 // ==============================
-// Realie Endpoints (Public API)
+// Realie endpoints
 // ==============================
 app.get("/api/realie/ping", (req, res) => {
   res.json({
@@ -441,7 +452,6 @@ app.get("/api/realie/ping", (req, res) => {
   });
 });
 
-// Address lookup
 app.get("/api/realie/address-lookup", async (req, res) => {
   try {
     if (!REALIE_API_KEY) return res.status(500).json({ ok: false, error: "REALIE_API_KEY is not set." });
@@ -463,10 +473,7 @@ app.get("/api/realie/address-lookup", async (req, res) => {
     if (county) params.county = county;
 
     const r = await axios.get(url, {
-      headers: {
-        Authorization: REALIE_API_KEY,
-        Accept: "application/json",
-      },
+      headers: { Authorization: REALIE_API_KEY, Accept: "application/json" },
       params,
       timeout: 20000,
     });
@@ -479,62 +486,15 @@ app.get("/api/realie/address-lookup", async (req, res) => {
   }
 });
 
-// Search
-app.get("/api/realie/search", async (req, res) => {
-  try {
-    if (!REALIE_API_KEY) return res.status(500).json({ ok: false, error: "REALIE_API_KEY is not set." });
-
-    const state = (req.query.state || "").trim().toUpperCase();
-    if (!state) return res.status(400).json({ ok: false, error: "state is required (e.g., OH)" });
-
-    const url = `${REALIE_BASE_URL}/public/property/search/`;
-    const params = { ...req.query, state };
-
-    const r = await axios.get(url, {
-      headers: { Authorization: REALIE_API_KEY, Accept: "application/json" },
-      params,
-      timeout: 20000,
-    });
-
-    res.json({ ok: true, data: r.data });
-  } catch (error) {
-    const status = error.response?.status || 500;
-    const details = error.response?.data || { message: error.message };
-    res.status(status).json({ ok: false, error: "Realie search failed", details });
-  }
-});
-
-// Premium comparables (only if your plan allows)
-app.get("/api/realie/comparables", async (req, res) => {
-  try {
-    if (!REALIE_API_KEY) return res.status(500).json({ ok: false, error: "REALIE_API_KEY is not set." });
-
-    const url = `${REALIE_BASE_URL}/public/premium/comparables/`;
-    const r = await axios.get(url, {
-      headers: { Authorization: REALIE_API_KEY, Accept: "application/json" },
-      params: { ...req.query },
-      timeout: 20000,
-    });
-
-    res.json({ ok: true, data: r.data });
-  } catch (error) {
-    const status = error.response?.status || 500;
-    const details = error.response?.data || { message: error.message };
-    res.status(status).json({ ok: false, error: "Realie comparables failed", details });
-  }
-}); // ✅ FIXED: was `};`
-
 // ==============================
-// Realie Sale Comps Helper
+// Realie sale comps helpers
 // ==============================
 function normalizeSaleComp(x) {
   const price =
-    toNumberLoose(pickFirst(x, ["salePrice", "lastSalePrice", "transferPrice", "price"])) ??
-    null;
+    toNumberLoose(pickFirst(x, ["salePrice", "lastSalePrice", "transferPrice", "price"])) ?? null;
 
   const sqft =
-    toNumberLoose(pickFirst(x, ["buildingArea", "livingArea", "squareFeet", "sqft"])) ??
-    null;
+    toNumberLoose(pickFirst(x, ["buildingArea", "livingArea", "squareFeet", "sqft"])) ?? null;
 
   const soldDate =
     pickFirst(x, ["saleDate", "lastSaleDate", "transferDate", "recordingDate"]) ?? null;
@@ -555,14 +515,10 @@ function normalizeSaleComp(x) {
 async function fetchRealieSaleComps({ state, county, subjectSqft, limit = 10 }) {
   if (!REALIE_API_KEY || !state || !county) return { ok: false, comps: [], source: null };
 
-  // 1) Try premium comparables (best, if allowed)
+  // 1) Try premium comparables
   try {
     const url = `${REALIE_BASE_URL}/public/premium/comparables/`;
-    const params = {
-      state,
-      county,
-      limit,
-    };
+    const params = { state, county, limit };
 
     const r = await axios.get(url, {
       headers: { Authorization: REALIE_API_KEY, Accept: "application/json" },
@@ -577,19 +533,13 @@ async function fetchRealieSaleComps({ state, county, subjectSqft, limit = 10 }) 
 
     if (comps.length) return { ok: true, comps, source: "realie_premium_comparables" };
   } catch (e) {
-    // ignore and fallback
+    // fallback
   }
 
-  // 2) Fallback: county search + filter sold-like fields
+  // 2) Fallback search
   try {
     const url = `${REALIE_BASE_URL}/public/property/search/`;
-
-    const params = {
-      state,
-      county,
-      limit: Math.max(limit * 5, 50),
-      offset: 0,
-    };
+    const params = { state, county, limit: Math.max(limit * 5, 50), offset: 0 };
 
     const r = await axios.get(url, {
       headers: { Authorization: REALIE_API_KEY, Accept: "application/json" },
@@ -602,7 +552,6 @@ async function fetchRealieSaleComps({ state, county, subjectSqft, limit = 10 }) 
 
     let comps = arr.map(normalizeSaleComp).filter((c) => c.price && c.sqft);
 
-    // keep closest sqft range if we have subject sqft
     const s = Number(subjectSqft);
     if (Number.isFinite(s) && s > 0) {
       comps = comps
@@ -652,18 +601,17 @@ function computeARVFromComps({ subjectSqft, saleComps }) {
 }
 
 // ==============================
-// Property Panel (RentCast + Realie + Geo + Census + Comps + ARV + Investment)
+// ✅ Property Panel (MASTER)
 // ==============================
 app.get("/api/property-panel", async (req, res) => {
   const fullAddress = (req.query.fullAddress || req.query.address || "").trim();
   const capRatePercent = Number(req.query.cap || 8);
 
-  const state = (req.query.state || "").trim().toUpperCase();
-  const addressLine1 = (req.query.addressLine1 || "").trim();
-  const city = (req.query.city || "").trim();
-  const county = (req.query.county || "").trim();
+  let state = (req.query.state || "").trim().toUpperCase();
+  let addressLine1 = (req.query.addressLine1 || "").trim();
+  let city = (req.query.city || "").trim();
+  let county = (req.query.county || "").trim();
 
-  // investment assumptions (optional)
   const purchasePrice = toNumberLoose(req.query.purchasePrice);
   const vacancyPercent = toNumberLoose(req.query.vacancyPercent) ?? 5;
   const expensePercent = toNumberLoose(req.query.expensePercent) ?? 35;
@@ -678,36 +626,64 @@ app.get("/api/property-panel", async (req, res) => {
     });
   }
 
+  const warnings = [];
+
   try {
-    // Always geocode (map + zip)
+    // Geocode
     const geo = fullAddress ? await geocodeToZip(fullAddress) : null;
     const zip = geo?.zip || null;
 
-    // Demographics
+    if (fullAddress && !geo) warnings.push("Geocoding failed (Nominatim). Check NOMINATIM_USER_AGENT + address format.");
+
+    // Census
     const demographics = zip ? await fetchCensusByZip(zip) : null;
 
-    // 1) RentCast (optional)
+    // Derive addressLine1 if missing
+    if (!addressLine1 && fullAddress) {
+      addressLine1 = fullAddress.split(",")[0].trim();
+      if (addressLine1) warnings.push("addressLine1 was not provided; derived from fullAddress.");
+    }
+
+    // Derive county/city from geo if missing
+    if (!county && geo?.raw?.county) {
+      county = String(geo.raw.county).replace(/ County$/i, "").trim();
+      if (county) warnings.push("county was not provided; derived from geocoding result.");
+    }
+
+    if (!city) {
+      city = geo?.raw?.city || geo?.raw?.town || geo?.raw?.village || city;
+    }
+
+    // RentCast
     let rentcastData = null;
     let rentcastProp = null;
 
-    if (RENTCAST_API_KEY && fullAddress) {
+    if (!RENTCAST_API_KEY) {
+      warnings.push("RENTCAST_API_KEY missing. RentCast calls skipped.");
+    } else if (fullAddress) {
       try {
         const rentcastResp = await axios.get("https://api.rentcast.io/v1/properties", {
-          headers: { "X-Api-Key": RENTCAST_API_KEY },
+          headers: { "X-Api-Key": RENTCAST_API_KEY, Accept: "application/json" },
           params: { address: fullAddress },
           timeout: 20000,
         });
+
         rentcastData = rentcastResp.data;
         rentcastProp = Array.isArray(rentcastData) ? rentcastData[0] : rentcastData;
+
+        if (!rentcastProp) warnings.push("RentCast returned no property for this address.");
       } catch (e) {
-        rentcastData = null;
-        rentcastProp = null;
+        warnings.push(`RentCast /v1/properties failed: ${e.response?.status || ""} ${JSON.stringify(e.response?.data || e.message)}`);
       }
+    } else {
+      warnings.push("No fullAddress provided, so RentCast lookup skipped.");
     }
 
-    // 2) Realie address lookup (optional)
+    // Realie
     let realie = null;
-    if (REALIE_API_KEY && state && addressLine1) {
+    if (!REALIE_API_KEY) {
+      warnings.push("REALIE_API_KEY missing. Realie calls skipped.");
+    } else if (state && addressLine1) {
       try {
         const url = `${REALIE_BASE_URL}/public/property/address/`;
         const params = { state, address: addressLine1 };
@@ -721,37 +697,35 @@ app.get("/api/property-panel", async (req, res) => {
         });
 
         realie = rr.data?.property ?? rr.data ?? null;
+        if (!realie) warnings.push("Realie returned no property record for this address.");
       } catch (e) {
-        realie = null;
+        warnings.push(`Realie address lookup failed: ${e.response?.status || ""} ${JSON.stringify(e.response?.data || e.message)}`);
       }
+    } else {
+      warnings.push("state + addressLine1 missing; Realie lookup skipped.");
     }
 
-    // 3) Subject sqft
+    // Subject sqft
     const subjectSqft =
       toNumberLoose(pickFirst(rentcastProp, ["squareFeet", "sqft", "livingArea", "area", "sizeSqft"])) ??
       toNumberLoose(pickFirst(realie, ["buildingArea", "livingArea", "squareFeet", "sqft"])) ??
       null;
 
-    // 4) Rent estimate (for investment summary)
+    // Rent estimate
     const rentEstimateMonthly =
       toNumberLoose(pickFirst(rentcastProp, ["rentEstimate", "rent", "estimatedRent", "rentEstimateMonthly"])) ??
       null;
 
-    // 5) Sale comps via Realie
+    // Sold comps (Realie needs state+county)
     const compsLimit = Math.min(toNumberLoose(req.query.saleCompLimit) ?? 10, 20);
-    const saleCompsResp = await fetchRealieSaleComps({
-      state,
-      county,
-      subjectSqft,
-      limit: compsLimit,
-    });
-
+    const saleCompsResp = await fetchRealieSaleComps({ state, county, subjectSqft, limit: compsLimit });
     const saleComps = saleCompsResp.ok ? saleCompsResp.comps : [];
+    if (!saleCompsResp.ok) warnings.push("Sold comps unavailable (Realie requires BOTH state + county).");
 
-    // 6) ARV from comps
+    // ARV
     const arv = computeARVFromComps({ subjectSqft, saleComps });
 
-    // 7) AVM (uses comps first, then rent-cap fallback)
+    // AVM
     const avm = computeSimpleAVM({
       subjectSqft,
       rentEstimateMonthly,
@@ -759,14 +733,14 @@ app.get("/api/property-panel", async (req, res) => {
       saleComps: saleComps.map((c) => ({ price: c.price, sqft: c.sqft })),
     });
 
-    // 8) Purchase price default (if user didn’t pass it)
+    // Purchase price fallback
     const fallbackPrice =
       purchasePrice ??
       toNumberLoose(pickFirst(rentcastProp, ["lastSalePrice", "salePrice", "price"])) ??
       toNumberLoose(pickFirst(realie, ["transferPrice", "lastSalePrice", "marketValue", "totalMarketValue"])) ??
       null;
 
-    // 9) Investment summary (only if we have price + rent)
+    // Investment summary
     const investment =
       fallbackPrice && rentEstimateMonthly
         ? computeInvestmentSummary({
@@ -780,8 +754,7 @@ app.get("/api/property-panel", async (req, res) => {
           })
         : {
             ok: false,
-            reason:
-              "Need purchase price + monthly rent estimate. Pass purchasePrice=... or enable RentCast rentEstimate.",
+            reason: "Need purchase price + monthly rent estimate.",
             purchasePrice: fallbackPrice ?? null,
             monthlyRent: rentEstimateMonthly ?? null,
           };
@@ -790,6 +763,7 @@ app.get("/api/property-panel", async (req, res) => {
 
     res.json({
       ok: true,
+      warnings,
       inputs: { fullAddress, state, addressLine1, city, county },
       geocoding: geo ? { lat: geo.lat, lon: geo.lon, zip: geo.zip, raw: geo.raw } : null,
       demographics,
